@@ -90,7 +90,7 @@ if platform.system() == "Windows":
 
 setup(
     name='libmedia_codec',
-    version='0.0.1',
+    version='0.0.2',
     author='DJI RoboMaster',
     description='RoboMaster python SDK libmedia_codec project',
     long_description='',

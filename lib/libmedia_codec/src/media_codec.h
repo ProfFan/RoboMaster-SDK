@@ -5,6 +5,7 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/avutil.h>
+#include <libavutil/imgutils.h>
 #include <libavutil/mem.h>
 #include <libswscale/swscale.h>
 }
@@ -26,19 +27,6 @@ extern "C" {
 #define PIX_FMT_RGB24 AV_PIX_FMT_RGB24
 #endif
 
-#ifndef CODEC_CAP_TRUNCATED
-#define CODEC_CAP_TRUNCATED AV_CODEC_CAP_TRUNCATED
-#endif
-
-#ifndef CODEC_FLAG_TRUNCATED
-#define CODEC_FLAG_TRUNCATED AV_CODEC_FLAG_TRUNCATED
-#endif
-
-#if (LIBAVCODEC_VERSION_MAJOR <= 54)
-#  define av_frame_alloc avcodec_alloc_frame
-#  define av_frame_free  avcodec_free_frame
-#endif
-
 using ubyte = unsigned char;
 namespace py = pybind11;
 
@@ -52,14 +40,12 @@ class H264Decoder {
 private:
     AVCodecContext        *context;
     AVFrame               *frame;
-    AVCodec               *codec;
+    const AVCodec         *codec;
     AVCodecParserContext  *parser;
     AVPacket              *pkt;
 
 public:
     H264Decoder() {
-        avcodec_register_all();
-
         codec = avcodec_find_decoder(AV_CODEC_ID_H264);
         if (!codec)
             throw CodecException("H264Decoder: avcodec_find_decoder failed!");
@@ -67,10 +53,6 @@ public:
         context = avcodec_alloc_context3(codec);
         if (!context)
             throw CodecException("H264Decoder: avcodec_alloc_context3 failed!");
-
-        if(codec->capabilities & CODEC_CAP_TRUNCATED) {
-            context->flags |= CODEC_FLAG_TRUNCATED;
-        }
 
         int err = avcodec_open2(context, codec, nullptr);
         if (err < 0)
@@ -84,18 +66,16 @@ public:
         if (!frame)
             throw CodecException("H264Decoder: av_frame_alloc failed!");
 
-        pkt = new AVPacket;
+        pkt = av_packet_alloc();
         if (!pkt)
-            throw CodecException("H264Decoder: alloc AVPacket failed!");
-        av_init_packet(pkt);
+            throw CodecException("H264Decoder: av_packet_alloc failed!");
     }
 
     ~H264Decoder() {
         av_parser_close(parser);
-        avcodec_close(context);
-        av_free(context);
+        avcodec_free_context(&context);
         av_frame_free(&frame);
-        delete pkt;
+        av_packet_free(&pkt);
     }
 
     ssize_t parse(const unsigned char* in_data, ssize_t in_size) {
@@ -110,10 +90,14 @@ public:
     }
 
     const AVFrame& decode_frame() {
-        int got_picture = 0;
-        int nread = avcodec_decode_video2(context, frame, &got_picture, pkt);
-        if (nread < 0 || got_picture == 0)
-            throw CodecException("H264Decoder: decode_frame, avcodec_decode_video2 failed!");
+        int ret = avcodec_send_packet(context, pkt);
+        if (ret < 0)
+            throw CodecException("H264Decoder: decode_frame, avcodec_send_packet failed!");
+
+        ret = avcodec_receive_frame(context, frame);
+        if (ret < 0)
+            throw CodecException("H264Decoder: decode_frame, avcodec_receive_frame failed!");
+
         return *frame;
     }
 };
@@ -140,7 +124,8 @@ public:
     }
 
     int predict_size(int w, int h) {
-        return avpicture_fill((AVPicture*)output_frame_, nullptr, output_format_, w, h);
+        return av_image_fill_arrays(output_frame_->data, output_frame_->linesize,
+                                    nullptr, output_format_, w, h, 1);
     }
 
     const AVFrame& convert(const AVFrame &frame, unsigned char* out_bgr) {
@@ -154,7 +139,8 @@ public:
         if (!context_)
             throw CodecException("FormatConverter: convert, sws_getCachedContext failed!");
 
-        avpicture_fill((AVPicture*)output_frame_, out_bgr, output_format_, w, h);
+        av_image_fill_arrays(output_frame_->data, output_frame_->linesize,
+                             out_bgr, output_format_, w, h, 1);
 
         sws_scale(context_, frame.data, frame.linesize, 0, h,
                   output_frame_->data, output_frame_->linesize);
@@ -226,7 +212,7 @@ public:
 
     ~PyH264Decoder() = default;
 
-    py::list decode(const py::str &input) {
+    py::list decode(const py::bytes &input) {
         ssize_t len = PYBIND11_BYTES_SIZE(input.ptr());
         const ubyte* data_in = (const ubyte*)(PYBIND11_BYTES_AS_STRING(input.ptr()));
 
@@ -272,7 +258,7 @@ public:
         delete [] int16_raw_;
     }
 
-    py::bytes decode(const py::str & input) {
+    py::bytes decode(const py::bytes & input) {
         ssize_t len = PYBIND11_BYTES_SIZE(input.ptr());
         const unsigned char* data_in = (const unsigned char*)(PYBIND11_BYTES_AS_STRING(input.ptr()));
         try {

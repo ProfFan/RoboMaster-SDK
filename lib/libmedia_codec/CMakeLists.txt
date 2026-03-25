@@ -1,13 +1,15 @@
-cmake_minimum_required(VERSION 3.4.1)
+cmake_minimum_required(VERSION 3.10)
 project (robomaster_media_codec)
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_BUILD_TYPE Release)
 SET(LIBRARY_OUTPUT_PATH ${CMAKE_SOURCE_DIR}/output)
 
 set(PYBIND11_PYTHON_VERSION 3)
-add_subdirectory(pybind11)
+find_package(pybind11 REQUIRED)
 
-pybind11_add_module(libmedia_codec src/media_codec.cpp)
+pybind11_add_module(libmedia_codec src/media_codec.h src/media_codec.cpp)
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
 
 IF (CMAKE_SYSTEM_NAME MATCHES "Windows")
 	SET(OPUS_INCLUDE_DIRS "${CMAKE_SOURCE_DIR}/src/opus-share/include")
@@ -23,5 +25,18 @@ IF (CMAKE_SYSTEM_NAME MATCHES "Windows")
 			${FFMEPG_INCLUDE_DIRS} 
 			${OPUS_INCLUDE_DIRS})
 ELSE ()
-	target_link_libraries(libmedia_codec PRIVATE opus avcodec swscale avutil)
+	find_package(PkgConfig REQUIRED)
+	pkg_check_modules(AVCODEC REQUIRED libavcodec)
+	pkg_check_modules(AVUTIL REQUIRED libavutil)
+	pkg_check_modules(SWSCALE REQUIRED libswscale)
+	pkg_check_modules(OPUS REQUIRED opus)
+	target_include_directories(libmedia_codec PRIVATE
+		${AVCODEC_INCLUDE_DIRS} ${AVUTIL_INCLUDE_DIRS}
+		${SWSCALE_INCLUDE_DIRS} ${OPUS_INCLUDE_DIRS})
+	target_link_directories(libmedia_codec PRIVATE
+		${AVCODEC_LIBRARY_DIRS} ${AVUTIL_LIBRARY_DIRS}
+		${SWSCALE_LIBRARY_DIRS} ${OPUS_LIBRARY_DIRS})
+	target_link_libraries(libmedia_codec PRIVATE
+		${AVCODEC_LIBRARIES} ${AVUTIL_LIBRARIES}
+		${SWSCALE_LIBRARIES} ${OPUS_LIBRARIES})
 ENDIF (CMAKE_SYSTEM_NAME MATCHES "Windows")
